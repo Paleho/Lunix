@@ -90,6 +90,7 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 {
 	/* Declarations */
+	struct lunix_chrdev_state_struct *state;
 	/* ? */
 	int ret;
 
@@ -105,6 +106,13 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	 debug("device number: major = %d, minor = %d", imajor(inode), iminor(inode));
 
 	/* Allocate a new Lunix character device private state structure */
+	//mine begin
+	state = kmalloc(sizeof(struct lunix_chrdev_state_struct), GFP_KERNEL);
+	if(!state) debug("state = NULL");
+	else debug("state = valid?");
+
+	filp->private_data = state;
+	//mine end
 	/* ? */
 out:
 	debug("leaving, with ret = %d\n", ret);
@@ -114,6 +122,9 @@ out:
 static int lunix_chrdev_release(struct inode *inode, struct file *filp)
 {
 	/* ? */
+	//mine begin
+	kfree(filp->private_data);
+	//mine end
 	return 0;
 }
 
@@ -126,6 +137,8 @@ static long lunix_chrdev_ioctl(struct file *filp, unsigned int cmd, unsigned lon
 static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t cnt, loff_t *f_pos)
 {
 	ssize_t ret;
+	char buff[6] = {'H', 'e', 'l', 'l', 'o', '\0'};
+	int rest;
 
 	struct lunix_sensor_struct *sensor;
 	struct lunix_chrdev_state_struct *state;
@@ -136,6 +149,14 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	sensor = state->sensor;
 	WARN_ON(!sensor);
 
+	//mine begin
+	debug("NULL checks passed");
+
+	if(cnt > 6) rest = copy_to_user(usrbuf, buff, 6);
+	else rest = copy_to_user(usrbuf, buff, cnt);
+	debug("copy_to_user: remaining data to copy: %d", rest);
+	ret = cnt - rest;
+	//mine end
 	/* Lock? */
 	/*
 	 * If the cached character device state needs to be
