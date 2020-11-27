@@ -92,7 +92,7 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	/* Declarations */
 	struct lunix_chrdev_state_struct *state;
 	/* ? */
-	int ret;
+	int ret, major, minor;
 
 	debug("entering\n");
 	ret = -ENODEV;
@@ -103,7 +103,11 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	 * Associate this open file with the relevant sensor based on
 	 * the minor number of the device node [/dev/sensor<NO>-<TYPE>]
 	 */
-	 debug("device number: major = %d, minor = %d", imajor(inode), iminor(inode));
+	major = imajor(inode);
+	minor = iminor(inode);
+	debug("device number: major = %d, minor = %d", major, minor);
+
+	debug("device type = %d", minor % 8);
 
 	/* Allocate a new Lunix character device private state structure */
 	//mine begin
@@ -111,6 +115,12 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	if(!state) debug("state = NULL");
 	else debug("state = valid?");
 
+	state->type = minor % 8;
+	state->sensor = &lunix_sensors[minor / 8]; 	//this is not what we want, I just wanted to know if can be compiled (it can)
+												//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
+												//lunix_sensors[0] ... lunix_sensors[15]
+	//initialize semaphore:  lock ??
+	sema_init(&state->lock, 1);
 	filp->private_data = state;
 	//mine end
 	/* ? */
@@ -152,6 +162,10 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	//mine begin
 	debug("NULL checks passed");
 
+	if (down_interruptible(&state->lock))
+ 		return -ERESTARTSYS;
+	debug("got the semaphore");
+	debug("asked to read from device type = %d", state->type);
 	if(cnt > 6) rest = copy_to_user(usrbuf, buff, 6);
 	else rest = copy_to_user(usrbuf, buff, cnt);
 	debug("copy_to_user: remaining data to copy: %d", rest);
@@ -181,6 +195,7 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	/* ? */
 out:
 	/* Unlock? */
+	up(&state->lock);
 	return ret;
 }
 

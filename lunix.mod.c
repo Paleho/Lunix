@@ -35,6 +35,7 @@ __attribute__((section("__versions"))) = {
 	{ 0xdaf485b9, "pv_lock_ops" },
 	{ 0xb5da66ef, "param_ops_int" },
 	{ 0x3fd78f3b, "register_chrdev_region" },
+	{ 0x25170ad2, "down_interruptible" },
 	{ 0x6091b333, "unregister_chrdev_region" },
 	{ 0x6f26a72a, "nonseekable_open" },
 	{ 0xa120d33c, "tty_unregister_ldisc" },
@@ -50,6 +51,7 @@ __attribute__((section("__versions"))) = {
 	{ 0x4302d0eb, "free_pages" },
 	{ 0x3eeb2322, "__wake_up" },
 	{ 0x37a0cba, "kfree" },
+	{ 0xcf2a6966, "up" },
 	{ 0x9e0ccf30, "tty_register_ldisc" },
 	{ 0x88db9f48, "__check_object_size" },
 };
