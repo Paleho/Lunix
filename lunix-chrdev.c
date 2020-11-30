@@ -40,12 +40,23 @@ struct cdev lunix_chrdev_cdev;
 static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *state)
 {
 	struct lunix_sensor_struct *sensor;
+	uint32_t time;
 
 	WARN_ON ( !(sensor = state->sensor));
 	/* ? */
 
+	//goto ret_true;
+	spin_lock(&sensor->lock);
+	time = sensor->msr_data[state->type]->last_update;
+	//should we grab magic number?
+	spin_unlock(&sensor->lock);
+
+
+	if(state->buf_timestamp < time) return 1;
 	/* The following return is bogus, just for the stub to compile */
 	return 0; /* ? */
+// ret_true:
+// 	return 1;
 }
 
 /*
@@ -56,6 +67,10 @@ static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *st
 static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 {
 	struct lunix_sensor_struct *sensor;
+	uint16_t raw_data;
+	uint32_t time;
+	long lookup_data;
+	int i, int_part, dec_part, digit_point;
 
 	debug("leaving\n");
 
@@ -63,20 +78,89 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	 * Grab the raw data quickly, hold the
 	 * spinlock for as little as possible.
 	 */
+	 sensor = state->sensor;
+
+	 spin_lock(&sensor->lock);
+	 raw_data = sensor->msr_data[state->type]->values[0];
+	 time = sensor->msr_data[state->type]->last_update;
+	 //should we grab magic number?
+	 spin_unlock(&sensor->lock);
+
 	/* ? */
 	/* Why use spinlocks? See LDD3, p. 119 */
 
 	/*
 	 * Any new data available?
 	 */
+	lookup_data = 0;
+	if(lunix_chrdev_state_needs_refresh(state)){//new data available
+		debug("new data found");
+		switch (state->type) {
+			case 0:
+				lookup_data = lookup_voltage[raw_data];
+				break;
+			case 1:
+				lookup_data = lookup_temperature[raw_data];
+				break;
+			case 2:
+				lookup_data = lookup_light[raw_data];
+				break;
+			case 3:
+				debug("invalid switch case!");
+				break;
+		}
+	}
+	debug("lookup_data = %ld", lookup_data);
+
 	/* ? */
 
 	/*
 	 * Now we can take our time to format them,
 	 * holding only the private state semaphore
 	 */
+	i = 0;
+	if(lookup_data < 0){
+		state->buf_data[i++] = '-';
+		lookup_data *= (-1);
+	}
+	dec_part = lookup_data % 10000;
+	int_part = lookup_data / 10000;
+	debug("int_part = %d", int_part);
+	debug("dec_part = %d", dec_part);
 
+	if(int_part <= 0){
+		state->buf_data[i++] = '0';
+	}
+	else{
+		digit_point = 10000;
+		while (int_part / digit_point == 0){
+			int_part %= digit_point;
+			digit_point /= 10; //move digit_point to the right
+			if(digit_point == 0){
+				debug("point where digit_point = 0");
+				state->buf_data[i++] = int_part + 48; //int_part is only one digit
+				goto dec;
+			}
+		}
+		while(digit_point > 0){
+			state->buf_data[i++] = (int_part / digit_point) + 48;
+			int_part %= digit_point;
+			digit_point /= 10; //move digit_point to the right
+		}
+	}//int part complete
+dec:
+	state->buf_data[i++] = '.';
+	digit_point = 1000;
+	while(digit_point > 0){
+		state->buf_data[i++] = (dec_part / digit_point) + 48;
+		dec_part %= digit_point;
+		digit_point /= 10; //move digit_point to the right
+	}
+	state->buf_lim = i;
 	/* ? */
+	debug("data returned = %s", state->buf_data);
+	for(i = 0; i < state->buf_lim; i++ )
+		debug("state->buf_data[%d] = %c", i, state->buf_data[i]);
 
 	debug("leaving\n");
 	return 0;
@@ -121,6 +205,8 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 												//lunix_sensors[0] ... lunix_sensors[15]
 	//initialize semaphore:  lock ??
 	sema_init(&state->lock, 1);
+	state->buf_timestamp = 0;
+	state->buf_lim = 0;
 	filp->private_data = state;
 	//mine end
 	/* ? */
@@ -147,7 +233,6 @@ static long lunix_chrdev_ioctl(struct file *filp, unsigned int cmd, unsigned lon
 static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t cnt, loff_t *f_pos)
 {
 	ssize_t ret;
-	char buff[6] = {'H', 'e', 'l', 'l', 'o', '\0'};
 	int rest;
 
 	struct lunix_sensor_struct *sensor;
@@ -166,9 +251,17 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
  		return -ERESTARTSYS;
 	debug("got the semaphore");
 	debug("asked to read from device type = %d", state->type);
-	if(cnt > 6) rest = copy_to_user(usrbuf, buff, 6);
-	else rest = copy_to_user(usrbuf, buff, cnt);
-	debug("copy_to_user: remaining data to copy: %d", rest);
+	// if(cnt > 6) rest = copy_to_user(usrbuf, buff, 6);
+	// else rest = copy_to_user(usrbuf, buff, cnt);
+	// debug("copy_to_user: remaining data to copy: %d", rest);
+
+	if(lunix_chrdev_state_needs_refresh(state))
+		lunix_chrdev_state_update(state);
+
+	if(cnt > state->buf_lim)
+		rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim);
+	else
+		rest = copy_to_user(usrbuf, state->buf_data, cnt);
 	ret = cnt - rest;
 	//mine end
 	/* Lock? */

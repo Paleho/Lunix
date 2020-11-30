@@ -36,6 +36,7 @@ __attribute__((section("__versions"))) = {
 	{ 0xb5da66ef, "param_ops_int" },
 	{ 0x3fd78f3b, "register_chrdev_region" },
 	{ 0x25170ad2, "down_interruptible" },
+	{ 0xad27f361, "__warn_printk" },
 	{ 0x6091b333, "unregister_chrdev_region" },
 	{ 0x6f26a72a, "nonseekable_open" },
 	{ 0xa120d33c, "tty_unregister_ldisc" },
