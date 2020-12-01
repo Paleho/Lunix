@@ -53,7 +53,8 @@ static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *st
 
 	if(state->buf_timestamp < time) return 1;
 	/* The following return is bogus, just for the stub to compile */
-	return 0; /* ? */
+	debug("needs update");
+	return -EAGAIN; /* ? */
 }
 
 /*
@@ -69,7 +70,7 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	long lookup_data;
 	int i, int_part, dec_part, digit_point;
 
-	debug("leaving\n");
+	debug("entering\n");
 
 	/*
 	 * Grab the raw data quickly, hold the
@@ -150,6 +151,7 @@ dec:
 		dec_part %= digit_point;
 		digit_point /= 10; //move digit_point to the right
 	}
+	state->buf_data[i++] = '\n'; //add a newline char
 	state->buf_lim = i;
 	/* ? */
 	debug("data returned = %s", state->buf_data);
@@ -231,6 +233,8 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	struct lunix_sensor_struct *sensor;
 	struct lunix_chrdev_state_struct *state;
 
+	debug("entering\n");
+
 	state = filp->private_data;
 	WARN_ON(!state);
 
@@ -245,14 +249,9 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	debug("got the semaphore");
 	debug("asked to read from device type = %d", state->type);
 
-	if(lunix_chrdev_state_needs_refresh(state))
-		lunix_chrdev_state_update(state);
+	// if(lunix_chrdev_state_needs_refresh(state))
+	// 	lunix_chrdev_state_update(state);
 
-	if(cnt > state->buf_lim)
-		rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim);
-	else
-		rest = copy_to_user(usrbuf, state->buf_data, cnt);
-	ret = cnt - rest;
 	//mine end
 	/* Lock? */
 	/*
@@ -260,14 +259,39 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	 * updated by actual sensor data (i.e. we need to report
 	 * on a "fresh" measurement, do so
 	 */
+	// if (*f_pos == 0) {
+	// 	while (lunix_chrdev_state_update(state) == -EAGAIN) {
+	// 		/* ? */
+	// 		/* The process needs to sleep */
+	// 		/* See LDD3, page 153 for a hint */
+	// 	}
+	// }
 	if (*f_pos == 0) {
-		while (lunix_chrdev_state_update(state) == -EAGAIN) {
+		while (lunix_chrdev_state_needs_refresh(state) == -EAGAIN) {
 			/* ? */
 			/* The process needs to sleep */
 			/* See LDD3, page 153 for a hint */
+			up(&state->lock); //release the lock
+			debug("reading going to sleep");
+			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state) != -EAGAIN)))
+				return -ERESTARTSYS; /* signal: tell the fs layer to handle it */
+				/* otherwise loop, but first reacquire the lock */
+			if (down_interruptible(&state->lock))
+				return -ERESTARTSYS;
 		}
 	}
-
+	//when we exit from the while loop, we know that the semaphore is
+	//held and an update is needed.
+	lunix_chrdev_state_update(state);
+	if(cnt > state->buf_lim){
+		rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim);
+		ret = state->buf_lim - rest;
+	}
+	else{
+		rest = copy_to_user(usrbuf, state->buf_data, cnt);
+		ret = cnt - rest;
+	}
+	debug("bytes read %ld", ret);
 	/* End of file */
 	/* ? */
 
@@ -276,9 +300,10 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 
 	/* Auto-rewind on EOF mode? */
 	/* ? */
-out:
+//out:
 	/* Unlock? */
 	up(&state->lock);
+	debug("leaving\n");
 	return ret;
 }
 
