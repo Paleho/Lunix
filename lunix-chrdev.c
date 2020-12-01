@@ -284,11 +284,13 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	//held and an update is needed.
 	lunix_chrdev_state_update(state);
 	if(cnt > state->buf_lim){
-		rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim);
+		if((rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim)))
+			return -EFAULT;
 		ret = state->buf_lim - rest;
 	}
 	else{
-		rest = copy_to_user(usrbuf, state->buf_data, cnt);
+		if((rest = copy_to_user(usrbuf, state->buf_data, cnt)))
+			return -EFAULT;
 		ret = cnt - rest;
 	}
 	debug("bytes read %ld", ret);
