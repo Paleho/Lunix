@@ -45,7 +45,6 @@ static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *st
 	WARN_ON ( !(sensor = state->sensor));
 	/* ? */
 
-	//goto ret_true;
 	spin_lock(&sensor->lock);
 	time = sensor->msr_data[state->type]->last_update;
 	//should we grab magic number?
@@ -55,8 +54,6 @@ static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *st
 	if(state->buf_timestamp < time) return 1;
 	/* The following return is bogus, just for the stub to compile */
 	return 0; /* ? */
-// ret_true:
-// 	return 1;
 }
 
 /*
@@ -92,26 +89,23 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	/*
 	 * Any new data available?
 	 */
+	state->buf_timestamp = time; //update timestamp
 	lookup_data = 0;
-	if(lunix_chrdev_state_needs_refresh(state)){//new data available
-		debug("new data found");
-		switch (state->type) {
-			case 0:
-				lookup_data = lookup_voltage[raw_data];
-				break;
-			case 1:
-				lookup_data = lookup_temperature[raw_data];
-				break;
-			case 2:
-				lookup_data = lookup_light[raw_data];
-				break;
-			case 3:
-				debug("invalid switch case!");
-				break;
-		}
+	switch (state->type) {
+		case 0:
+			lookup_data = lookup_voltage[raw_data];
+			break;
+		case 1:
+			lookup_data = lookup_temperature[raw_data];
+			break;
+		case 2:
+			lookup_data = lookup_light[raw_data];
+			break;
+		case 3:
+			debug("invalid switch case!");
+			break;
 	}
 	debug("lookup_data = %ld", lookup_data);
-
 	/* ? */
 
 	/*
@@ -123,8 +117,8 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 		state->buf_data[i++] = '-';
 		lookup_data *= (-1);
 	}
-	dec_part = lookup_data % 10000;
-	int_part = lookup_data / 10000;
+	dec_part = lookup_data % 1000;
+	int_part = lookup_data / 1000;
 	debug("int_part = %d", int_part);
 	debug("dec_part = %d", dec_part);
 
@@ -150,7 +144,7 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	}//int part complete
 dec:
 	state->buf_data[i++] = '.';
-	digit_point = 1000;
+	digit_point = 100;
 	while(digit_point > 0){
 		state->buf_data[i++] = (dec_part / digit_point) + 48;
 		dec_part %= digit_point;
@@ -200,8 +194,7 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	else debug("state = valid?");
 
 	state->type = minor % 8;
-	state->sensor = &lunix_sensors[minor / 8]; 	//this is not what we want, I just wanted to know if can be compiled (it can)
-												//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
+	state->sensor = &lunix_sensors[minor / 8]; 	//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
 												//lunix_sensors[0] ... lunix_sensors[15]
 	//initialize semaphore:  lock ??
 	sema_init(&state->lock, 1);
@@ -251,9 +244,6 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
  		return -ERESTARTSYS;
 	debug("got the semaphore");
 	debug("asked to read from device type = %d", state->type);
-	// if(cnt > 6) rest = copy_to_user(usrbuf, buff, 6);
-	// else rest = copy_to_user(usrbuf, buff, cnt);
-	// debug("copy_to_user: remaining data to copy: %d", rest);
 
 	if(lunix_chrdev_state_needs_refresh(state))
 		lunix_chrdev_state_update(state);
