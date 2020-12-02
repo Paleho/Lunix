@@ -195,7 +195,7 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	/* Declarations */
 	struct lunix_chrdev_state_struct *state;
 	/* ? */
-	int ret, major, minor,device_type;
+	int ret, major, minor,sensor_type;
 
 	debug("Entering\n");
 	ret = -ENODEV;
@@ -211,8 +211,8 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	// Δε νομίζω πως το κάνουμε κάτι τον major
 
 	minor = iminor(inode);
-	device_type=minor%8;
-	 if(type >= N_LUNIX_MSR) { // Ο αριθμός συσκευής δεν υπάρχει
+	sensor_type=minor%8;
+	 if(sensor_type >= N_LUNIX_MSR) { // Ο αριθμός αισθητήρα δεν υπάρχει
 		ret = -ENODEV;								
 		debug("Leaving, with return number = %d\n", ret);
 		return ret;
@@ -226,7 +226,7 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	if(!state) debug("state = NULL");
 	else debug("state = valid?");
 
-	state->type = device_type; // Η δομή μας δείχνει το κατάλληλο τύπο συσκευής
+	state->type = sensor_type; // Η δομή μας δείχνει το κατάλληλο τύπο συσκευής
                              
 	state->sensor = &lunix_sensors[minor / 8]; 	
 												//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
@@ -267,7 +267,6 @@ static long lunix_chrdev_ioctl(struct file *filp, unsigned int cmd, unsigned lon
 static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t cnt, loff_t *f_pos)
 {
 	ssize_t ret;
-	int rest;
 	struct lunix_sensor_struct *sensor;
 	struct lunix_chrdev_state_struct *state;
 
@@ -301,7 +300,7 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 			/* See LDD3, page 153 for a hint */
 			up(&state->lock); //release the lock
 			debug("reading going to sleep");
-			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state)))
+			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state))))
 				return -ERESTARTSYS; /* signal: tell the fs layer to handle it */
 				/* otherwise loop, but first reacquire the lock */
 			if (down_interruptible(&state->lock))
@@ -322,13 +321,13 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	// Αν ζητήθηκαν περισσότερα δεδομένα απ' όσα είναι διαθέσιμα
 	// επιστρέφονται τα διαθέσιμα
 	if(cnt + *f_pos > state->buf_lim) 
-		cnt=state->buf_lim - *f_pos
+		cnt=state->buf_lim - *f_pos;
 	
 	//Διαφωνώ με αυτό γιατί μπορεί να ζητηθούν λιγότερα από τα διαθέσιμα
 	//if((rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim)))
 
 	// Αντιγράφονται μόνο τα νέα δεδομένα
-	if((copy_to_user(usrbuf, *f_pos+state->buf_data, cnt)))
+	if((copy_to_user(usrbuf, *f_pos+state->buf_data, cnt))){
 		debug("Copying to user failed.\n");	
 		return -EFAULT;
 	}
@@ -336,7 +335,7 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	*f_pos+=cnt; // Προχωράμε το δείκτη τόσες θέσεις όσα bytes γράφτηκαν
 	ret=cnt; 	// Επιστρέφεται ο αριθμός bytes που γράφτηκαν (άρα που θα διαβαστούν)  
 
-	debug("Βytes read: %ld", ret);
+	
 	/* End of file */
 	/* ? */
 
@@ -345,8 +344,10 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 
 	/* Auto-rewind on EOF mode? */
 	/* ? */
+
 out:
 	/* Unlock? */
+	debug("Βytes read: %ld", ret);
 	up(&state->lock);
 	return ret;
 }
