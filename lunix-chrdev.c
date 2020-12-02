@@ -37,22 +37,32 @@ struct cdev lunix_chrdev_cdev;
  * Just a quick [unlocked] check to see if the cached
  * chrdev state needs to be updated from sensor measurements.
  */
+//COMPLETE
 static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *state)
-{
+{ 
 	struct lunix_sensor_struct *sensor;
-	uint32_t time;
+	uint32_t time; 
 
 	WARN_ON ( !(sensor = state->sensor));
 	/* ? */
 
-	spin_lock(&sensor->lock);
-	time = sensor->msr_data[state->type]->last_update;
+    /* Κλείδωμα γιατί μπορεί κ΄άποιος άλλος να προσπαθεί να τσεκάρει επίσης 
+     * ή να γίνεται προσπάθεια να προστεθεί δεδομένο εκείνη τη στιγμή
+     * και να δημιουργηθεί πρόβλημα. Γιατί πρέπει να επιλέξουμε spinlock?
+     */
+	spin_lock(&sensor->lock); 
+	time = sensor->msr_data[state->type]->last_update; 
 	//should we grab magic number?
+    //Που χρησιμοποιείται το magic number?
 	spin_unlock(&sensor->lock);
 
 
 	if(state->buf_timestamp < time) return 1;
-	/* The following return is bogus, just for the stub to compile */
+    /* Αν ο χρόνος στον buffer μας είναι μικρότερος από το χρόνο
+     * που ανανεώθηκε τελευταία φορά η δομή sersor_struct 
+     * τότε ήλθαν νέα δεδομένα
+     */
+
 	debug("needs update");
 	return -EAGAIN; /* ? */
 }
@@ -78,7 +88,9 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	 */
 	 sensor = state->sensor;
 
-	 spin_lock(&sensor->lock);
+     // Χρησιμοποιε΄ίται γιατί ίσως γίνει και άλλη κλήση
+     // από άλλη διεργασία για δεδομένα και δημιουργηθεί πρόβλημα
+	 spin_lock(&sensor->lock); 
 	 raw_data = sensor->msr_data[state->type]->values[0];
 	 time = sensor->msr_data[state->type]->last_update;
 	 //should we grab magic number?
@@ -90,31 +102,41 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	/*
 	 * Any new data available?
 	 */
-	state->buf_timestamp = time; //update timestamp
-	lookup_data = 0;
-	switch (state->type) {
-		case 0:
-			lookup_data = lookup_voltage[raw_data];
-			break;
-		case 1:
-			lookup_data = lookup_temperature[raw_data];
-			break;
-		case 2:
-			lookup_data = lookup_light[raw_data];
-			break;
-		case 3:
-			debug("invalid switch case!");
-			break;
-	}
+	state->buf_timestamp = time; //update timestamp 
+    // ανανεώνουμε τη χρονική στιγμή που πήραμε τα τελευταία δεδομένα
+    // στη δομή μας
+    lookup_data = 0;
+	//if(lunix_chrdev_state_needs_refresh(state)){//new data available
+	//	debug("new data found");
+    // Γιατί σβήστηκε ?
+
+	// Αναλόγως με το τύπο τους αναζητούμε τα μορφοποιημένα δεδομένα 
+    // στα lookup_tables
+        switch (state->type) { 
+			case 0:
+				lookup_data = lookup_voltage[raw_data]; 
+				break;
+			case 1:
+				lookup_data = lookup_temperature[raw_data];
+				break;
+			case 2:
+				lookup_data = lookup_light[raw_data];
+				break;
+			case 3:
+				debug("invalid switch case!");
+				break;
+		}
 	debug("lookup_data = %ld", lookup_data);
+
 	/* ? */
 
 	/*
 	 * Now we can take our time to format them,
 	 * holding only the private state semaphore
+     * Τι είναι αυτός ο σημαφόρος και γιατί χρησιμοποιείται
 	 */
 	i = 0;
-	if(lookup_data < 0){
+	if(lookup_data < 0){ //Τα δεδομένα είναι λάθος ?
 		state->buf_data[i++] = '-';
 		lookup_data *= (-1);
 	}
@@ -127,7 +149,8 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 		state->buf_data[i++] = '0';
 	}
 	else{
-		digit_point = 10000;
+        //Αποθήκευση αριθμού στη ζητούμενη 10δική μορφή
+		digit_point = 10000; 
 		while (int_part / digit_point == 0){
 			int_part %= digit_point;
 			digit_point /= 10; //move digit_point to the right
@@ -152,7 +175,7 @@ dec:
 		digit_point /= 10; //move digit_point to the right
 	}
 	state->buf_data[i++] = '\n'; //add a newline char
-	state->buf_lim = i;
+    state->buf_lim = i;
 	/* ? */
 	debug("data returned = %s", state->buf_data);
 	for(i = 0; i < state->buf_lim; i++ )
@@ -172,9 +195,9 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	/* Declarations */
 	struct lunix_chrdev_state_struct *state;
 	/* ? */
-	int ret, major, minor;
+	int ret, major, minor,device_type;
 
-	debug("entering\n");
+	debug("Entering\n");
 	ret = -ENODEV;
 	if ((ret = nonseekable_open(inode, filp)) < 0)
 		goto out;
@@ -183,10 +206,18 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	 * Associate this open file with the relevant sensor based on
 	 * the minor number of the device node [/dev/sensor<NO>-<TYPE>]
 	 */
-	major = imajor(inode);
-	minor = iminor(inode);
-	debug("device number: major = %d, minor = %d", major, minor);
 
+	//major = imajor(inode); //Έχει δοθεί ως όρισμα το inode του ειδικού αρχείου 
+	// Δε νομίζω πως το κάνουμε κάτι τον major
+
+	minor = iminor(inode);
+	device_type=minor%8;
+	 if(type >= N_LUNIX_MSR) { // Ο αριθμός συσκευής δεν υπάρχει
+		ret = -ENODEV;								
+		debug("Leaving, with return number = %d\n", ret);
+		return ret;
+	 }
+	debug("device number: major = %d, minor = %d", major, minor);
 	debug("device type = %d", minor % 8);
 
 	/* Allocate a new Lunix character device private state structure */
@@ -195,14 +226,19 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	if(!state) debug("state = NULL");
 	else debug("state = valid?");
 
-	state->type = minor % 8;
-	state->sensor = &lunix_sensors[minor / 8]; 	//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
+	state->type = device_type; // Η δομή μας δείχνει το κατάλληλο τύπο συσκευής
+                             
+	state->sensor = &lunix_sensors[minor / 8]; 	
+												//lunix lunix_sensors is externally defined in lunix.h and initialized in lunix-model.c/(init)
 												//lunix_sensors[0] ... lunix_sensors[15]
-	//initialize semaphore:  lock ??
+	//initialize semaphore:  locking what ?
 	sema_init(&state->lock, 1);
 	state->buf_timestamp = 0;
 	state->buf_lim = 0;
-	filp->private_data = state;
+    // Xρησιμοποιείται το πεδίο private_data της δομής file
+    // ώστε να δείχνει σε δομή τύπου lunix_chrdev_state_struct,
+    // οποία περιγράφει την τρέχουσα κατάσταση της συσκευής.
+	filp->private_data = state; 
 	//mine end
 	/* ? */
 out:
@@ -214,7 +250,7 @@ static int lunix_chrdev_release(struct inode *inode, struct file *filp)
 {
 	/* ? */
 	//mine begin
-	kfree(filp->private_data);
+	kfree(filp->private_data); 
 	//mine end
 	return 0;
 }
@@ -225,47 +261,39 @@ static long lunix_chrdev_ioctl(struct file *filp, unsigned int cmd, unsigned lon
 	return -EINVAL;
 }
 
+/* cnt: Αριθμός bytes που ζητούνται για διάβασμα από τη διεργασία χρήστη
+ * f_pos: Τρέχουσα θέση ανάγνωσης/εγγραφής του αρχείου χρήστη
+*/
 static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t cnt, loff_t *f_pos)
 {
 	ssize_t ret;
 	int rest;
-
 	struct lunix_sensor_struct *sensor;
 	struct lunix_chrdev_state_struct *state;
 
-	debug("entering\n");
+	debug("Εntering\n");
 
-	state = filp->private_data;
+    state = filp->private_data;
 	WARN_ON(!state);
 
 	sensor = state->sensor;
 	WARN_ON(!sensor);
 
 	//mine begin
-	debug("NULL checks passed");
+	debug("NULL checks passed"); 
 
 	if (down_interruptible(&state->lock))
  		return -ERESTARTSYS;
 	debug("got the semaphore");
 	debug("asked to read from device type = %d", state->type);
-
-	// if(lunix_chrdev_state_needs_refresh(state))
-	// 	lunix_chrdev_state_update(state);
-
-	//mine end
+	
 	/* Lock? */
 	/*
 	 * If the cached character device state needs to be
 	 * updated by actual sensor data (i.e. we need to report
 	 * on a "fresh" measurement, do so
 	 */
-	// if (*f_pos == 0) {
-	// 	while (lunix_chrdev_state_update(state) == -EAGAIN) {
-	// 		/* ? */
-	// 		/* The process needs to sleep */
-	// 		/* See LDD3, page 153 for a hint */
-	// 	}
-	// }
+	
 	if (*f_pos == 0) {
 		while (lunix_chrdev_state_needs_refresh(state) == -EAGAIN) {
 			/* ? */
@@ -273,25 +301,42 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 			/* See LDD3, page 153 for a hint */
 			up(&state->lock); //release the lock
 			debug("reading going to sleep");
-			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state) != -EAGAIN)))
+			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state)))
 				return -ERESTARTSYS; /* signal: tell the fs layer to handle it */
 				/* otherwise loop, but first reacquire the lock */
 			if (down_interruptible(&state->lock))
 				return -ERESTARTSYS;
 		}
 	}
-	//when we exit from the while loop, we know that the semaphore is
-	//held and an update is needed.
+	// when we exit from the while loop, we know that the semaphore is
+	// held and an update is needed.
+ 
+	// Δε ξέρω κατά πόσον είναι καλή ιδέα η χρήση της εδώ
+	// Εξήγησε λίγο τη λογική
 	lunix_chrdev_state_update(state);
-	if(cnt > state->buf_lim){
-		rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim);
-		ret = state->buf_lim - rest;
+	
+	// Καθορίζουμε τα bytes που θα επιστραφούν σε userspace
+	// Τα υπόλοιπα bytes έχουν γραφτεί ήδη
+	ret= state->buf_lim - *f_pos;
+	
+	// Αν ζητήθηκαν περισσότερα δεδομένα απ' όσα είναι διαθέσιμα
+	// επιστρέφονται τα διαθέσιμα
+	if(cnt + *f_pos > state->buf_lim) 
+		cnt=state->buf_lim - *f_pos
+	
+	//Διαφωνώ με αυτό γιατί μπορεί να ζητηθούν λιγότερα από τα διαθέσιμα
+	//if((rest = copy_to_user(usrbuf, state->buf_data, state->buf_lim)))
+
+	// Αντιγράφονται μόνο τα νέα δεδομένα
+	if((copy_to_user(usrbuf, *f_pos+state->buf_data, cnt)))
+		debug("Copying to user failed.\n");	
+		return -EFAULT;
 	}
-	else{
-		rest = copy_to_user(usrbuf, state->buf_data, cnt);
-		ret = cnt - rest;
-	}
-	debug("bytes read %ld", ret);
+
+	*f_pos+=cnt; // Προχωράμε το δείκτη τόσες θέσεις όσα bytes γράφτηκαν
+	ret=cnt; 	// Επιστρέφεται ο αριθμός bytes που γράφτηκαν (άρα που θα διαβαστούν)  
+
+	debug("Βytes read: %ld", ret);
 	/* End of file */
 	/* ? */
 
@@ -300,10 +345,9 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 
 	/* Auto-rewind on EOF mode? */
 	/* ? */
-//out:
+out:
 	/* Unlock? */
 	up(&state->lock);
-	debug("leaving\n");
 	return ret;
 }
 
@@ -340,25 +384,23 @@ int lunix_chrdev_init(void)
 	dev_no = MKDEV(LUNIX_CHRDEV_MAJOR, 0);
 	/* ? */
 	// mine begin
-	ret = register_chrdev_region(dev_no, lunix_minor_cnt, "lunix_device");
+
+	/*  Allocates the device numbers (major & minor) needed.
+       Εισάγει τη συκευή χαρακτήρων στο πυρήνα.
+       dev_no: πρώτος αριθμός που θελουμε
+       lunix_minor_cnt: το πλήθος των αριθμών που θελουμε να δεσμευσουμε. 
+       lunix_device: όνομα της συσκευής που δεσμεύουμε
+    */
+    ret = register_chrdev_region(dev_no, lunix_minor_cnt, "lunix_device");
 	// mine end
 	/* register_chrdev_region? */
 	if (ret < 0) {
 		debug("failed to register region, ret = %d\n", ret);
-		goto out;
-	}
-	/* ? */
-	//mine begin
-	ret = cdev_add(&lunix_chrdev_cdev, dev_no, lunix_minor_cnt);
-	//mine end
-	/* cdev_add? */
-	if (ret < 0) {
-		debug("failed to add character device\n");
 		goto out_with_chrdev_region;
 	}
-	debug("completed successfully\n");
+    debug("completed successfully\n");
 	return 0;
-
+	
 out_with_chrdev_region:
 	unregister_chrdev_region(dev_no, lunix_minor_cnt);
 out:
