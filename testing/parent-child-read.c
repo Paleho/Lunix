@@ -14,19 +14,21 @@ int main(int argc, char ** argv){
     pid_t p = fork();
     if(p < 0) write(2, "fork error\n", 11);
     else if(p == 0){
-        char child_buf[8];
+        char child_buf[10];
         int times = 1;
         while(times <= 10){
-            ssize_t i = read(fd, child_buf, 8);
+            ssize_t i = read(fd, child_buf, 10);
+			child_buf[i] = '\0';
             printf("child_iter %d: read %d bytes: %s\n", times, i, child_buf);
             times++;
         }
     }
     else{
-        char parent_buf[8];
+        char parent_buf[10];
         int times = 1;
         while(times <= 10){
-            ssize_t i = read(fd, parent_buf, 8);
+            ssize_t i = read(fd, parent_buf, 10);
+			parent_buf[i] = '\0';
             printf("parent_iter %d: read %d bytes: %s\n", times, i, parent_buf);
             times++;
         }

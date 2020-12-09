@@ -10,10 +10,12 @@ int main(int argc, char ** argv){
 		return 0;
 	}
 
-	char  b[5];
+	char  b[10];
 	ssize_t i = read(fd, b, 4);
+	b[i] = '\0';
 	printf("read %d bytes: %s\n", i, b);
 	i = read(fd, b, 8);
+	b[i] = '\0';
 	printf("read %d bytes: %s\n", i, b);
 	close(fd);
 	return 0;
