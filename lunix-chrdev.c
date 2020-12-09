@@ -4,7 +4,8 @@
  * Implementation of character devices
  * for Lunix:TNG
  *
- * < Your name here >
+ * Poutas Sokratis, poutasok@gmail.com
+ * Stais Aggelos,   aggelosstaisv@gmail.com
  *
  */
 
@@ -44,17 +45,12 @@ static int lunix_chrdev_state_needs_refresh(struct lunix_chrdev_state_struct *st
 
 	// Will warn in kernel log if the allocation fails ????????
 	WARN_ON (!(sensor = state->sensor));
-	/* ? */
 
-	// It says unlocked so should we put that ????????????
-	// What will happen if we check unlocked ?
-	spin_lock(&sensor->lock);
+	// It says unlocked. Why though ? Locked seems more safe.
 
 	// Timestamp (last_update) is used to figure out whether 
 	// there is a new measure in sensor_struct
 	time = sensor->msr_data[state->type]->last_update;
-	spin_unlock(&sensor->lock);
-
 
 	if(state->buf_timestamp < time) return 1;
 	/* The following return is bogus, just for the stub to compile */
@@ -98,8 +94,8 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
 	 */
 
 	/* 
-	 * In which context is this executed ?????????
-	 * If in interrupt context, interrupts should
+	 * In which context is this executed ?
+	 * Interrupt context, so interrupts should
 	 * be disabled while holding the lock so irqsave is used
 	 */
 
@@ -127,8 +123,10 @@ static int lunix_chrdev_state_update(struct lunix_chrdev_state_struct *state)
     dec_part = lookup_data % 1000;
 	sprintf(state->buf_data,"%c%d.%d\n",sign,int_part,dec_part);	
 	
-	// Set buf_lim to the number of data bytes available
-	state->buf_lim = strnlen(state->buf_data, 20);
+	// Set buf_lim to the number of data bytes available 
+	// minus -1 because there is also \n in the buffer
+	// and shouldn't be counted as data byte
+	state->buf_lim = strnlen(state->buf_data, 20)-1;
 
 	debug("data returned = %s", state->buf_data);
 
@@ -147,7 +145,6 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 {
 	/* Declarations */
 	struct lunix_chrdev_state_struct *state;
-	/* ? */
 	int ret, major, minor,sensor_type;
 
 	debug("entering\n");
@@ -174,8 +171,9 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 
 	debug("device type = %d", minor % 8);
 
-	/* Allocate a new Lunix character device private state structure */
-	// Normal kernel ram is allocated
+	/* Allocate a new Lunix character device private state structure.
+	 * Normal kernel ram is allocated
+	 */
 	state = kmalloc(sizeof(struct lunix_chrdev_state_struct), GFP_KERNEL);
 	if(!state) debug("state = NULL");
 	else debug("state = valid?");
@@ -190,7 +188,6 @@ static int lunix_chrdev_open(struct inode *inode, struct file *filp)
 	state->buf_lim = 0;
 	filp->private_data = state;
 
-	/* ? */
 out:
 	debug("leaving, with ret = %d\n", ret);
 	return ret;
@@ -229,18 +226,14 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	sensor = state->sensor;
 	WARN_ON(!sensor);
 
-	// We get the state semaphore 
+	// Try to get the semaphore
+	// if it returns nonzero, the operation was interrupted. 
 	if (down_interruptible(&state->lock))
  		return -ERESTARTSYS;
 
 	debug("Got the state_semaphore.\n");
 	debug("Asked to read from device type = %d.\n", state->type);
 
-	// if(lunix_chrdev_state_needs_refresh(state))
-	// 	lunix_chrdev_state_update(state);
-
-	//mine end
-	
 	/*
 	 * If the cached character device state needs to be
 	 * updated by actual sensor data (i.e. we need to report
@@ -252,16 +245,16 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	if (*f_pos == 0) {	
 		// While there is no need for an update in state_struct
 		while (lunix_chrdev_state_needs_refresh(state) == -EAGAIN) {
-			/* ? */
 			/* The process needs to sleep */
 			/* See LDD3, page 153 for a hint */
 			up(&state->lock); //release the lock
 			debug("reading going to sleep");
+			// process put in list of waiting processes for new sersor data
 			if (wait_event_interruptible(sensor->wq, (lunix_chrdev_state_needs_refresh(state) != -EAGAIN)))
-				return -ERESTARTSYS; /* signal: tell the fs layer to handle it */
+				return -ERESTARTSYS; /* our process was woken up by signal: tell the fs layer to handle it */
 				/* otherwise loop, but first reacquire the lock */
 
-			// Update is needed, try to get the lock
+			// Try to get the lock
 			if (down_interruptible(&state->lock))
 				return -ERESTARTSYS;
 		}
@@ -276,11 +269,18 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	if(cnt > state->buf_lim- *f_pos)
 		try_bytes=state->buf_lim - *f_pos;
 	else
-		try_bytes=cnt; // Try to return as many as asked
+		try_bytes=cnt; // Try to return as many bytes as asked
 	
+	// If the last bytes of the measurement are asked 
+	// increase the bytes trying to return to include the \n character.
+	if(try_bytes+*f_pos==state->buf_lim)
+		try_bytes+=1;
+
 	// Try to copy the bytes to userspace
-	if((rest = copy_to_user(usrbuf, state->buf_data+*f_pos, try_bytes)))
-		return -EFAULT;
+	if((rest = copy_to_user(usrbuf, state->buf_data+*f_pos, try_bytes))){
+			return_bytes= -EFAULT; // If fails return error
+			goto out;
+	}
 	
 	// The return bytes are those tried minus those failed
 	return_bytes = try_bytes - rest;
@@ -294,9 +294,10 @@ static ssize_t lunix_chrdev_read(struct file *filp, char __user *usrbuf, size_t 
 	 * If given all the data of the measurement,
 	 * start from the begining of the file.
 	 */
-	if (*f_pos == state->buf_lim)
+	if (*f_pos == state->buf_lim+1)
 		*f_pos = 0;
 
+out:
 	/* Unlock? */
 	up(&state->lock);
 	debug("Leaving Read.\n");
@@ -338,7 +339,6 @@ int lunix_chrdev_init(void)
 
 	// Creates a device number from major 60 and minor 0
 	dev_no = MKDEV(LUNIX_CHRDEV_MAJOR, 0);
-	/* ? */
 	
 	// mine begin
 	// Allocate the needed device IDs
@@ -350,7 +350,7 @@ int lunix_chrdev_init(void)
 		debug("failed to register region, ret = %d\n", ret);
 		goto out;
 	}
-	/* ? */
+
 	//mine begin
 	// Inserts the device (represented by chrdev_struct) to the kernel
 	ret = cdev_add(&lunix_chrdev_cdev, dev_no, lunix_minor_cnt);
